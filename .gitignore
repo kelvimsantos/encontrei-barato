@@ -1,10 +1,23 @@
 ﻿node_modules/
-uploads/
-.env
-client/build/
 client/node_modules/
-.DS_Store
-*.log
-dist/
+server/node_modules/
+
+# Build outputs (ignora TODAS as pastas build)
+/build
+client/build/
+server/build/
+
+# Environment files
+.env
 .env.local
-.env.*.local
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Uploads
+uploads/
+server/uploads/
