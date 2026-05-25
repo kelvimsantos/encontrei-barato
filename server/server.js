@@ -13,41 +13,66 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Config multer
+// ========== CRIAÇÃO DE PASTAS ==========
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const DATA_DIR = path.join(__dirname, 'data');
+
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  console.log('📁 Pasta uploads criada');
+}
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log('📁 Pasta data criada');
+}
+
+// Servir arquivos estáticos
+app.use('/uploads', express.static(UPLOADS_DIR));
+
+// ========== CONFIG MULTER ==========
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+  destination: (req, file, cb) => {
+    if (!fs.existsSync(UPLOADS_DIR)) {
+      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    }
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+    cb(null, uniqueName);
+  }
 });
-const upload = multer({ storage });
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 // ========== SISTEMA DE FALLBACK JSON ==========
-const DATA_DIR = path.join(__dirname, 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
-
-// Arquivos JSON
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
 
-// Inicializar arquivos JSON se não existirem
+// Inicializar users.json
 if (!fs.existsSync(USERS_FILE)) {
   const defaultUsers = [{
     _id: "admin123",
     email: "admin@shoppe.com",
     password: bcrypt.hashSync('admin123', 10),
-    createdAt: new Date()
+    createdAt: new Date().toISOString()
   }];
   fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2));
   console.log('✅ users.json criado com admin');
 }
 
+// Inicializar products.json
 if (!fs.existsSync(PRODUCTS_FILE)) {
   fs.writeFileSync(PRODUCTS_FILE, JSON.stringify([], null, 2));
   console.log('✅ products.json criado');
 }
 
-// Funções para JSON
+// Funções JSON
 function getUsers() {
   try {
     return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
@@ -75,64 +100,67 @@ function saveProducts(products) {
 // ========== TENTAR CONECTAR MONGODB ==========
 let usandoMongo = false;
 
-mongoose.connect(process.env.MONGODB_URI, {
-  serverSelectionTimeoutMS: 5000,
-})
-.then(() => {
-  console.log('✅ Conectado ao MongoDB Atlas - Usando Banco de Dados');
-  usandoMongo = true;
-})
-.catch(err => {
-  console.log('⚠️ MongoDB não conectou, usando JSON como fallback');
-  console.log('   Erro:', err.message);
-  usandoMongo = false;
-});
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 5000,
+  })
+  .then(() => {
+    console.log('✅ Conectado ao MongoDB Atlas');
+    usandoMongo = true;
+  })
+  .catch(err => {
+    console.log('⚠️ MongoDB não conectou, usando JSON fallback');
+    console.log('   Erro:', err.message);
+    usandoMongo = false;
+  });
+} else {
+  console.log('⚠️ MONGODB_URI não definida, usando JSON fallback');
+}
 
 // ========== MODELS (para MongoDB) ==========
 const UserSchema = new mongoose.Schema({
   email: String,
-  password: String
+  password: String,
+  createdAt: Date
 });
 const User = mongoose.model('User', UserSchema);
 
 const ProductSchema = new mongoose.Schema({
+  _id: String,
   name: String,
   category: String,
   description: String,
   affiliateLink: String,
   images: [String],
   model3dUrl: String,
-  createdAt: { type: Date, default: Date.now }
+  createdAt: Date
 });
 const Product = mongoose.model('Product', ProductSchema);
 
-// ========== FUNÇÕES DE CRUD (Mongo ou JSON) ==========
+// ========== FUNÇÕES CRUD ==========
 async function findUserByEmail(email) {
   if (usandoMongo) {
     return await User.findOne({ email });
-  } else {
-    const users = getUsers();
-    return users.find(u => u.email === email);
   }
+  return getUsers().find(u => u.email === email);
 }
 
 async function createUser(email, hashedPassword) {
   if (usandoMongo) {
-    const user = new User({ email, password: hashedPassword });
+    const user = new User({ email, password: hashedPassword, createdAt: new Date() });
     await user.save();
     return user;
-  } else {
-    const users = getUsers();
-    const newUser = {
-      _id: Date.now().toString(),
-      email,
-      password: hashedPassword,
-      createdAt: new Date()
-    };
-    users.push(newUser);
-    saveUsers(users);
-    return newUser;
   }
+  const users = getUsers();
+  const newUser = {
+    _id: Date.now().toString(),
+    email,
+    password: hashedPassword,
+    createdAt: new Date().toISOString()
+  };
+  users.push(newUser);
+  saveUsers(users);
+  return newUser;
 }
 
 async function deleteUserByEmail(email) {
@@ -140,8 +168,7 @@ async function deleteUserByEmail(email) {
     await User.deleteOne({ email });
   } else {
     const users = getUsers();
-    const filtered = users.filter(u => u.email !== email);
-    saveUsers(filtered);
+    saveUsers(users.filter(u => u.email !== email));
   }
 }
 
@@ -151,69 +178,66 @@ async function getProductsList(category, search) {
     if (category) filter.category = category;
     if (search) filter.name = { $regex: search, $options: 'i' };
     return await Product.find(filter).sort({ createdAt: -1 });
-  } else {
-    let products = getProducts();
-    if (category) products = products.filter(p => p.category === category);
-    if (search) products = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
-    return products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
+  let products = getProducts();
+  if (category) products = products.filter(p => p.category === category);
+  if (search) products = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+  return products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 async function getProductById(id) {
   if (usandoMongo) {
     return await Product.findById(id);
-  } else {
-    const products = getProducts();
-    return products.find(p => p._id === id);
   }
+  return getProducts().find(p => p._id === id);
 }
 
 async function createProduct(productData, images) {
   const newProduct = {
     _id: Date.now().toString(),
-    ...productData,
+    name: productData.name,
+    category: productData.category,
+    description: productData.description,
+    affiliateLink: productData.affiliateLink,
+    model3dUrl: productData.model3dUrl || '',
     images: images || [],
-    createdAt: new Date()
+    createdAt: new Date().toISOString()
   };
   
   if (usandoMongo) {
     const product = new Product(newProduct);
     await product.save();
     return product;
-  } else {
-    const products = getProducts();
-    products.push(newProduct);
-    saveProducts(products);
-    return newProduct;
   }
+  const products = getProducts();
+  products.push(newProduct);
+  saveProducts(products);
+  return newProduct;
 }
 
 async function updateProduct(id, productData, images) {
   if (usandoMongo) {
     const product = await Product.findById(id);
     if (!product) return null;
-    if (images) productData.images = images;
+    if (images && images.length) productData.images = images;
     Object.assign(product, productData);
     await product.save();
     return product;
-  } else {
-    const products = getProducts();
-    const index = products.findIndex(p => p._id === id);
-    if (index === -1) return null;
-    if (images) productData.images = images;
-    products[index] = { ...products[index], ...productData };
-    saveProducts(products);
-    return products[index];
   }
+  const products = getProducts();
+  const index = products.findIndex(p => p._id === id);
+  if (index === -1) return null;
+  if (images && images.length) productData.images = images;
+  products[index] = { ...products[index], ...productData };
+  saveProducts(products);
+  return products[index];
 }
 
 async function deleteProduct(id) {
   if (usandoMongo) {
     await Product.findByIdAndDelete(id);
   } else {
-    const products = getProducts();
-    const filtered = products.filter(p => p._id !== id);
-    saveProducts(filtered);
+    saveProducts(getProducts().filter(p => p._id !== id));
   }
 }
 
@@ -223,13 +247,22 @@ app.get('/setup', async (req, res) => {
     await deleteUserByEmail('admin@shoppe.com');
     const hashed = bcrypt.hashSync('admin123', 10);
     await createUser('admin@shoppe.com', hashed);
-    res.send(`✅ Admin criado!<br>Email: admin@shoppe.com<br>Senha: admin123<br>Banco: ${usandoMongo ? 'MongoDB' : 'JSON'}<br><br><a href="/admin">Ir para o Admin</a>`);
+    res.send(`
+      <html><body style="font-family: Arial; text-align: center; padding: 50px;">
+      <h1>✅ Admin Criado!</h1>
+      <p>Email: <strong>admin@shoppe.com</strong></p>
+      <p>Senha: <strong>admin123</strong></p>
+      <p>Banco: <strong>${usandoMongo ? 'MongoDB Atlas' : 'JSON (local)'}</strong></p>
+      <br>
+      <a href="/admin" style="background: #00b4d8; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Ir para o Admin</a>
+      </body></html>
+    `);
   } catch (err) {
     res.send('❌ Erro: ' + err.message);
   }
 });
 
-// ========== ROTAS DA API ==========
+// ========== ROTAS API ==========
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -237,7 +270,7 @@ app.post('/api/login', async (req, res) => {
     if (!user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET || 'secretkey');
     res.json({ token });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -266,10 +299,14 @@ app.get('/api/products/:id', async (req, res) => {
 
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
+    console.log('📦 Recebendo produto:', req.body);
+    console.log('📸 Arquivos:', req.files ? req.files.length : 0);
+    
     const images = req.files ? req.files.map(f => `/uploads/${f.filename}`) : [];
     const product = await createProduct(req.body, images);
     res.json(product);
   } catch (err) {
+    console.error('❌ Erro ao criar produto:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -294,7 +331,7 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 });
 
-// Categorias
+// ========== CATEGORIAS ==========
 app.get('/api/categories', (req, res) => {
   const categories = [
     { id: 'eletronicos', name: 'Eletrônicos', color: '#00b4d8', icon: '📱', bgColor: 'rgba(0, 180, 216, 0.1)' },
@@ -313,17 +350,27 @@ app.get('/api/categories', (req, res) => {
   res.json(categories);
 });
 
-// Servir frontend
-app.use(express.static(path.join(__dirname, '../client/build')));
+// ========== SERVIR FRONTEND ==========
+const BUILD_PATH = path.join(__dirname, '../client/build');
+if (fs.existsSync(BUILD_PATH)) {
+  app.use(express.static(BUILD_PATH));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(BUILD_PATH, 'index.html'));
+  });
+} else {
+  console.log('⚠️ Pasta client/build não encontrada');
+  app.get('/', (req, res) => {
+    res.send('API funcionando! Frontend não construído ainda.');
+  });
+}
 
-// Rota para frontend
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
-});
-
+// ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`\n🚀 Servidor rodando em http://localhost:${PORT}`);
   console.log(`📊 Admin: http://localhost:${PORT}/admin`);
-  console.log(`💾 Banco: ${usandoMongo ? 'MongoDB Atlas' : 'JSON (fallback)'}`);
+  console.log(`🔧 Setup: http://localhost:${PORT}/setup`);
+  console.log(`💾 Modo: ${usandoMongo ? 'MongoDB Atlas' : 'JSON (fallback)'}`);
+  console.log(`📁 Uploads: ${UPLOADS_DIR}`);
+  console.log(`💾 Dados: ${DATA_DIR}\n`);
 });
