@@ -200,9 +200,13 @@ async function backupToCloudinary() {
         `data:application/json;base64,${Buffer.from(jsonString).toString('base64')}`,
         {
           resource_type: "raw",
-          public_id: `backups/encontrei-barato-backup`,
+          // IMPORTANTE:
+          // - Para backups com folder, use um public_id SEM o prefixo do folder.
+          // - O Cloudinary assina o request incluindo folder/overwrite/timestamp.
+          // Isso evita erro de assinatura (Invalid Signature).
+          public_id: `encontrei-barato-backup`,
           folder: "shoppe_affiliate",
-          overwrite: true
+          overwrite: true,
         },
         (error, result) => {
           if (error) reject(error);
@@ -239,10 +243,25 @@ async function restoreFromCloudinary() {
     for (const url of urls) {
       try {
         console.log(`🔍 Tentando: ${url}`);
-        const response = await fetch(url);
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json'
+          }
+        });
+
+        // Cloudinary raw upload retorna conteúdo binário/texto.
+        // Precisamos ler como texto e depois fazer JSON.parse.
         if (response.ok) {
-          backupData = await response.json();
-          console.log(`✅ Backup encontrado em: ${url}`);
+          const text = await response.text();
+          try {
+            backupData = JSON.parse(text);
+            console.log(`✅ Backup encontrado em: ${url}`);
+          } catch (parseErr) {
+            // Caso retorne algo inesperado, loga para debug.
+            console.log('⚠️ Não foi possível parsear backup como JSON:', parseErr.message);
+            console.log('📄 Primeiros caracteres do retorno:', text.slice(0, 200));
+          }
           break;
         }
       } catch (e) {
