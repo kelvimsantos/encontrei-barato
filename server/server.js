@@ -175,6 +175,10 @@ app.get('*', (req, res) => {
 });
 
 
+
+
+const PORT = process.env.PORT || 3000;
+
 app.get('/setup', async (req, res) => {
   try {
     const bcrypt = require('bcryptjs');
@@ -183,13 +187,13 @@ app.get('/setup', async (req, res) => {
     await User.deleteOne({ email: 'admin@shoppe.com' });
     const hashed = await bcrypt.hash('admin123', 10);
     await User.create({ email: 'admin@shoppe.com', password: hashed });
+    
     res.send('✅ Admin criado! Email: admin@shoppe.com, Senha: admin123');
   } catch (err) {
     res.send('❌ Erro: ' + err.message);
   }
 });
 
-const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
   console.log(`📊 Admin: http://localhost:${PORT}/admin`);
