@@ -1,0 +1,14 @@
+﻿
+{
+  "name": "encontrei-barato",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "concurrently \"cd server && npm run dev\" \"cd client && npm start\"",
+    "install-all": "cd server && npm install && cd ../client && npm install",
+    "setup": "cd server && node setup.js",
+    "build": "cd client && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
