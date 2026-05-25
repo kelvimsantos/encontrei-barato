@@ -437,6 +437,70 @@ app.use((req, res, next) => {
 });
 
 // ========== ROTA DE SETUP ==========
+// ================== DEBUG ENDPOINTS (abertos) ==================
+app.get('/api/debug-mode', async (req, res) => {
+  try {
+    const localProductsCount = getProducts().length;
+    let mongoCount = null;
+
+    if (usandoMongo) {
+      try {
+        mongoCount = await Product.countDocuments({});
+      } catch (e) {
+        mongoCount = 'error:' + e.message;
+      }
+    }
+
+    res.json({
+      usandoMongo,
+      localProductsCount,
+      mongoProductsCount: mongoCount,
+      cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
+      cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || null,
+      uploadsDir: UPLOADS_DIR,
+      dataDir: DATA_DIR
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/debug-cloudinary-upload', async (req, res) => {
+  try {
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      return res.status(400).json({ error: 'CLOUDINARY_CLOUD_NAME não definida' });
+    }
+
+    const payload = {
+      debug: true,
+      ts: new Date().toISOString(),
+      note: 'debug-cloudinary-upload'
+    };
+
+    const jsonString = JSON.stringify(payload, null, 2);
+
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload(
+        `data:application/json;base64,${Buffer.from(jsonString).toString('base64')}`,
+        {
+          resource_type: 'raw',
+          public_id: `debug/${Date.now()}-encontrei-barato-json`,
+          folder: 'shoppe_affiliate'
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve(result);
+        }
+      );
+    });
+
+    res.json({ ok: true, secure_url: result.secure_url });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ========== ROTA DE SETUP ========== 
 app.get('/setup', async (req, res) => {
   try {
     await deleteUserByEmail('admin@shoppe.com');
