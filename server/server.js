@@ -528,18 +528,39 @@ app.post('/api/products', upload.array('images', 5), async (req, res) => {
     
     const images = [];
     if (req.files && req.files.length > 0) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+        throw new Error('CLOUDINARY_CLOUD_NAME não definida. Configure Cloudinary no Render.');
+      }
+
       for (const file of req.files) {
         const filePath = path.join(UPLOADS_DIR, file.filename);
-        if (fs.existsSync(filePath)) {
-          images.push(`/uploads/${file.filename}`);
-          console.log(`✅ Imagem salva: ${file.filename}`);
-        } else {
+        if (!fs.existsSync(filePath)) {
           console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
+          continue;
         }
+
+        const result = await cloudinary.uploader.upload(filePath, {
+          folder: 'shoppe_affiliate/products',
+          resource_type: 'image',
+          public_id: `product-${Date.now()}-${file.filename}`,
+          overwrite: false
+        });
+
+        images.push(result.secure_url);
+        console.log(`✅ Imagem enviada ao Cloudinary: ${file.filename}`);
+
+        // opcional: reduzir uso de disco no container
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {}
       }
     }
-    
+
     const product = await createProduct(req.body, images);
+    if (images && images.length > 0) {
+      // substituir imagem local (uploads) por URLs Cloudinary, tudo já foi persistido em products.json
+      console.log(`✅ Imagens persistidas via Cloudinary: ${images.length}`);
+    }
     
     const duration = Date.now() - startTime;
     console.log(`✅ Produto criado com sucesso em ${duration}ms`);
@@ -571,9 +592,36 @@ app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
     
     ensureDirectories();
     
-    const images = req.files && req.files.length > 0 
-      ? req.files.map(f => `/uploads/${f.filename}`) 
-      : null;
+    let images = null;
+    if (req.files && req.files.length > 0) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+        throw new Error('CLOUDINARY_CLOUD_NAME não definida. Configure Cloudinary no Render.');
+      }
+
+      images = [];
+      for (const file of req.files) {
+        const filePath = path.join(UPLOADS_DIR, file.filename);
+        if (!fs.existsSync(filePath)) {
+          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
+          continue;
+        }
+
+        const result = await cloudinary.uploader.upload(filePath, {
+          folder: 'shoppe_affiliate/products',
+          resource_type: 'image',
+          public_id: `product-${Date.now()}-${file.filename}`,
+          overwrite: false
+        });
+
+        images.push(result.secure_url);
+        console.log(`✅ Imagem enviada ao Cloudinary (update): ${file.filename}`);
+
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {}
+      }
+    }
+
     
     const product = await updateProduct(req.params.id, req.body, images);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
