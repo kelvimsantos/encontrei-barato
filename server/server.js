@@ -174,6 +174,21 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
+
+app.get('/setup', async (req, res) => {
+  try {
+    const bcrypt = require('bcryptjs');
+    const User = mongoose.model('User');
+    
+    await User.deleteOne({ email: 'admin@shoppe.com' });
+    const hashed = await bcrypt.hash('admin123', 10);
+    await User.create({ email: 'admin@shoppe.com', password: hashed });
+    res.send('✅ Admin criado! Email: admin@shoppe.com, Senha: admin123');
+  } catch (err) {
+    res.send('❌ Erro: ' + err.message);
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
