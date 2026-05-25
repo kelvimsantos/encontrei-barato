@@ -76,6 +76,49 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
+
+// ROTA DE TESTE DO CLOUDINARY
+app.get('/api/cloudinary-test', async (req, res) => {
+  try {
+    const cloudinary = require('cloudinary').v2;
+    
+    // Verificar configuração
+    const config = {
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY ? '****' + process.env.CLOUDINARY_API_KEY.slice(-4) : 'não definida',
+      api_secret: process.env.CLOUDINARY_API_SECRET ? '****' + process.env.CLOUDINARY_API_SECRET.slice(-4) : 'não definida'
+    };
+    
+    // Tentar fazer upload de teste
+    const testData = { test: true, timestamp: Date.now() };
+    const testJson = JSON.stringify(testData);
+    const testBuffer = Buffer.from(testJson);
+    
+    const result = await cloudinary.uploader.upload(
+      `data:application/json;base64,${testBuffer.toString('base64')}`,
+      {
+        resource_type: "auto",
+        public_id: `test-backup`,
+        folder: "shoppe_affiliate",
+        overwrite: true
+      }
+    );
+    
+    res.json({ 
+      success: true, 
+      config,
+      uploadResult: result.secure_url
+    });
+  } catch (err) {
+    res.json({ 
+      success: false, 
+      error: err.message,
+      cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME
+    });
+  }
+});
+
+
 // ========== SISTEMA DE FALLBACK JSON ==========
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
@@ -130,11 +173,14 @@ async function backupToCloudinary() {
   try {
     // Verificar se Cloudinary está configurado
     if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      console.log('⚠️ Cloudinary não configurado - backup ignorado');
       return null;
     }
     
     const products = getProducts();
     const users = getUsers();
+    
+    console.log(`📦 Preparando backup: ${products.length} produtos, ${users.length} usuários`);
     
     const backupData = {
       products,
@@ -144,61 +190,101 @@ async function backupToCloudinary() {
     };
     
     const jsonString = JSON.stringify(backupData, null, 2);
-    const jsonBuffer = Buffer.from(jsonString);
     
-    const result = await cloudinary.uploader.upload(
-      `data:application/json;base64,${jsonBuffer.toString('base64')}`,
-      {
-        resource_type: "auto",
-        public_id: `backups/encontrei-barato-backup`,
-        folder: "shoppe_affiliate",
-        overwrite: true
-      }
-    );
+    // Usar fetch para fazer upload (mais confiável)
+    const cloudinary = require('cloudinary').v2;
     
-    console.log(`✅ Backup salvo no Cloudinary: ${result.secure_url}`);
+    // Upload via base64
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload(
+        `data:application/json;base64,${Buffer.from(jsonString).toString('base64')}`,
+        {
+          resource_type: "raw",
+          public_id: `backups/encontrei-barato-backup`,
+          folder: "shoppe_affiliate",
+          overwrite: true
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+    });
+    
+    console.log(`✅ Backup salvo: ${result.secure_url}`);
     return result.secure_url;
   } catch (err) {
-    console.error('❌ Erro no backup Cloudinary:', err.message);
+    console.error('❌ Erro no backup:', err.message);
     return null;
   }
 }
 
 async function restoreFromCloudinary() {
   try {
-    // Verificar se Cloudinary está configurado
     if (!process.env.CLOUDINARY_CLOUD_NAME) {
-      console.log('ℹ️ Cloudinary não configurado, pulando restauração');
+      console.log('ℹ️ Cloudinary não configurado');
       return false;
     }
     
-    const backupUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/v1/shoppe_affiliate/backups/encontrei-barato-backup`;
+    // Tentar diferentes formatos de URL
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const urls = [
+      `https://res.cloudinary.com/${cloudName}/raw/upload/v1/shoppe_affiliate/backups/encontrei-barato-backup`,
+      `https://res.cloudinary.com/${cloudName}/raw/upload/shoppe_affiliate/backups/encontrei-barato-backup`,
+      `https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`
+    ];
     
-    const response = await fetch(backupUrl);
-    if (!response.ok) throw new Error('Backup não encontrado');
+    let backupData = null;
     
-    const backupData = await response.json();
-    
-    if (backupData.products && backupData.products.length > 0) {
-      saveProducts(backupData.products);
-      console.log(`✅ Restaurados ${backupData.products.length} produtos do Cloudinary`);
+    for (const url of urls) {
+      try {
+        console.log(`🔍 Tentando: ${url}`);
+        const response = await fetch(url);
+        if (response.ok) {
+          backupData = await response.json();
+          console.log(`✅ Backup encontrado em: ${url}`);
+          break;
+        }
+      } catch (e) {
+        console.log(`⚠️ Falha no URL: ${e.message}`);
+      }
     }
     
-    if (backupData.users && backupData.users.length > 0) {
-      // Não restaurar admin se já existir
-      const existingUsers = getUsers();
-      if (existingUsers.length === 0 || (existingUsers.length === 1 && existingUsers[0].email === 'admin@shoppe.com')) {
-        saveUsers(backupData.users);
-        console.log(`✅ Restaurados ${backupData.users.length} usuários do Cloudinary`);
-      }
+    if (!backupData || !backupData.products) {
+      console.log('ℹ️ Nenhum backup válido encontrado');
+      return false;
+    }
+    
+    // Restaurar produtos
+    if (backupData.products && backupData.products.length > 0) {
+      saveProducts(backupData.products);
+      console.log(`✅ Restaurados ${backupData.products.length} produtos`);
     }
     
     return true;
   } catch (err) {
-    console.log('ℹ️ Nenhum backup encontrado no Cloudinary');
+    console.error('❌ Erro na restauração:', err.message);
     return false;
   }
 }
+
+
+app.get('/api/force-backup', async (req, res) => {
+  try {
+    const url = await backupToCloudinary();
+    const products = getProducts();
+    
+    res.json({ 
+      success: !!url, 
+      url,
+      productCount: products.length,
+      cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME
+    });
+  } catch (err) {
+    res.json({ success: false, error: err.message });
+  }
+});
+
 
 // ========== TENTAR CONECTAR MONGODB ==========
 let usandoMongo = false;
