@@ -1,4 +1,3 @@
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -60,7 +59,20 @@ const auth = async (req, res, next) => {
   }
 };
 
-// ROTAS
+// ========== ROTA DE SETUP (ANTES do app.get('*')) ==========
+app.get('/setup', async (req, res) => {
+  try {
+    await User.deleteOne({ email: 'admin@shoppe.com' });
+    const hashed = await bcrypt.hash('admin123', 10);
+    await User.create({ email: 'admin@shoppe.com', password: hashed });
+    res.send('✅ Admin criado!<br>Email: admin@shoppe.com<br>Senha: admin123<br><br><a href="/admin">Ir para o Admin</a>');
+  } catch (err) {
+    res.send('❌ Erro: ' + err.message);
+  }
+});
+// ============================================================
+
+// ROTAS DA API
 app.post('/api/setup', async (req, res) => {
   try {
     const existing = await User.findOne({ email: 'admin@shoppe.com' });
@@ -166,33 +178,15 @@ app.get('/api/categories', (req, res) => {
   res.json(categories);
 });
 
-// Servir o frontend React
+// Servir o frontend React (TEM QUE SER ANTES DO app.get('*'))
 app.use(express.static(path.join(__dirname, '../client/build')));
 
-// Rota para o frontend (TEM QUE SER A ÚLTIMA)
+// Rota para o frontend (TEM QUE SER A ÚLTIMA - captura todas as outras rotas)
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
-
-
-
 const PORT = process.env.PORT || 3000;
-
-app.get('/setup', async (req, res) => {
-  try {
-    const bcrypt = require('bcryptjs');
-    const User = mongoose.model('User');
-    
-    await User.deleteOne({ email: 'admin@shoppe.com' });
-    const hashed = await bcrypt.hash('admin123', 10);
-    await User.create({ email: 'admin@shoppe.com', password: hashed });
-    
-    res.send('✅ Admin criado! Email: admin@shoppe.com, Senha: admin123');
-  } catch (err) {
-    res.send('❌ Erro: ' + err.message);
-  }
-});
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
