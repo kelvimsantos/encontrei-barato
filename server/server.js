@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
@@ -21,78 +22,219 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Conectar MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ Conectado ao MongoDB Atlas'))
-  .catch(err => console.error('❌ Erro ao conectar:', err));
+// ========== SISTEMA DE FALLBACK JSON ==========
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
-// Models
+// Arquivos JSON
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
+
+// Inicializar arquivos JSON se não existirem
+if (!fs.existsSync(USERS_FILE)) {
+  const defaultUsers = [{
+    _id: "admin123",
+    email: "admin@shoppe.com",
+    password: bcrypt.hashSync('admin123', 10),
+    createdAt: new Date()
+  }];
+  fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2));
+  console.log('✅ users.json criado com admin');
+}
+
+if (!fs.existsSync(PRODUCTS_FILE)) {
+  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify([], null, 2));
+  console.log('✅ products.json criado');
+}
+
+// Funções para JSON
+function getUsers() {
+  try {
+    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveUsers(users) {
+  fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2));
+}
+
+function getProducts() {
+  try {
+    return JSON.parse(fs.readFileSync(PRODUCTS_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveProducts(products) {
+  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
+}
+
+// ========== TENTAR CONECTAR MONGODB ==========
+let usandoMongo = false;
+
+mongoose.connect(process.env.MONGODB_URI, {
+  serverSelectionTimeoutMS: 5000,
+})
+.then(() => {
+  console.log('✅ Conectado ao MongoDB Atlas - Usando Banco de Dados');
+  usandoMongo = true;
+})
+.catch(err => {
+  console.log('⚠️ MongoDB não conectou, usando JSON como fallback');
+  console.log('   Erro:', err.message);
+  usandoMongo = false;
+});
+
+// ========== MODELS (para MongoDB) ==========
 const UserSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true }
+  email: String,
+  password: String
 });
 const User = mongoose.model('User', UserSchema);
 
 const ProductSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  category: { type: String, required: true },
-  description: { type: String, required: true },
-  affiliateLink: { type: String, required: true },
-  images: [{ type: String }],
-  model3dUrl: { type: String },
+  name: String,
+  category: String,
+  description: String,
+  affiliateLink: String,
+  images: [String],
+  model3dUrl: String,
   createdAt: { type: Date, default: Date.now }
 });
 const Product = mongoose.model('Product', ProductSchema);
 
-// Auth middleware
-const auth = async (req, res, next) => {
-  try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    if (!token) throw new Error();
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId);
-    if (!user) throw new Error();
-    req.user = user;
-    next();
-  } catch {
-    res.status(401).json({ error: 'Autenticação necessária' });
+// ========== FUNÇÕES DE CRUD (Mongo ou JSON) ==========
+async function findUserByEmail(email) {
+  if (usandoMongo) {
+    return await User.findOne({ email });
+  } else {
+    const users = getUsers();
+    return users.find(u => u.email === email);
   }
-};
+}
 
-// ========== ROTA DE SETUP (ANTES do app.get('*')) ==========
+async function createUser(email, hashedPassword) {
+  if (usandoMongo) {
+    const user = new User({ email, password: hashedPassword });
+    await user.save();
+    return user;
+  } else {
+    const users = getUsers();
+    const newUser = {
+      _id: Date.now().toString(),
+      email,
+      password: hashedPassword,
+      createdAt: new Date()
+    };
+    users.push(newUser);
+    saveUsers(users);
+    return newUser;
+  }
+}
+
+async function deleteUserByEmail(email) {
+  if (usandoMongo) {
+    await User.deleteOne({ email });
+  } else {
+    const users = getUsers();
+    const filtered = users.filter(u => u.email !== email);
+    saveUsers(filtered);
+  }
+}
+
+async function getProductsList(category, search) {
+  if (usandoMongo) {
+    let filter = {};
+    if (category) filter.category = category;
+    if (search) filter.name = { $regex: search, $options: 'i' };
+    return await Product.find(filter).sort({ createdAt: -1 });
+  } else {
+    let products = getProducts();
+    if (category) products = products.filter(p => p.category === category);
+    if (search) products = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+    return products.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+}
+
+async function getProductById(id) {
+  if (usandoMongo) {
+    return await Product.findById(id);
+  } else {
+    const products = getProducts();
+    return products.find(p => p._id === id);
+  }
+}
+
+async function createProduct(productData, images) {
+  const newProduct = {
+    _id: Date.now().toString(),
+    ...productData,
+    images: images || [],
+    createdAt: new Date()
+  };
+  
+  if (usandoMongo) {
+    const product = new Product(newProduct);
+    await product.save();
+    return product;
+  } else {
+    const products = getProducts();
+    products.push(newProduct);
+    saveProducts(products);
+    return newProduct;
+  }
+}
+
+async function updateProduct(id, productData, images) {
+  if (usandoMongo) {
+    const product = await Product.findById(id);
+    if (!product) return null;
+    if (images) productData.images = images;
+    Object.assign(product, productData);
+    await product.save();
+    return product;
+  } else {
+    const products = getProducts();
+    const index = products.findIndex(p => p._id === id);
+    if (index === -1) return null;
+    if (images) productData.images = images;
+    products[index] = { ...products[index], ...productData };
+    saveProducts(products);
+    return products[index];
+  }
+}
+
+async function deleteProduct(id) {
+  if (usandoMongo) {
+    await Product.findByIdAndDelete(id);
+  } else {
+    const products = getProducts();
+    const filtered = products.filter(p => p._id !== id);
+    saveProducts(filtered);
+  }
+}
+
+// ========== ROTA DE SETUP ==========
 app.get('/setup', async (req, res) => {
   try {
-    await User.deleteOne({ email: 'admin@shoppe.com' });
-    const hashed = await bcrypt.hash('admin123', 10);
-    await User.create({ email: 'admin@shoppe.com', password: hashed });
-    res.send('✅ Admin criado!<br>Email: admin@shoppe.com<br>Senha: admin123<br><br><a href="/admin">Ir para o Admin</a>');
+    await deleteUserByEmail('admin@shoppe.com');
+    const hashed = bcrypt.hashSync('admin123', 10);
+    await createUser('admin@shoppe.com', hashed);
+    res.send(`✅ Admin criado!<br>Email: admin@shoppe.com<br>Senha: admin123<br>Banco: ${usandoMongo ? 'MongoDB' : 'JSON'}<br><br><a href="/admin">Ir para o Admin</a>`);
   } catch (err) {
     res.send('❌ Erro: ' + err.message);
   }
 });
-// ============================================================
 
-// ROTAS DA API
-app.post('/api/setup', async (req, res) => {
-  try {
-    const existing = await User.findOne({ email: 'admin@shoppe.com' });
-    if (!existing) {
-      const hashed = await bcrypt.hash('admin123', 10);
-      await User.create({ email: 'admin@shoppe.com', password: hashed });
-      res.json({ message: 'Admin criado: admin@shoppe.com / admin123' });
-    } else {
-      res.json({ message: 'Admin já existe' });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
+// ========== ROTAS DA API ==========
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user || !(await bcrypt.compare(password, user.password))) {
+    const user = await findUserByEmail(email);
+    if (!user || !bcrypt.compareSync(password, user.password)) {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
@@ -105,10 +247,7 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/products', async (req, res) => {
   try {
     const { category, search } = req.query;
-    let filter = {};
-    if (category) filter.category = category;
-    if (search) filter.name = { $regex: search, $options: 'i' };
-    const products = await Product.find(filter).sort({ createdAt: -1 });
+    const products = await getProductsList(category, search);
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -117,7 +256,7 @@ app.get('/api/products', async (req, res) => {
 
 app.get('/api/products/:id', async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await getProductById(req.params.id);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
     res.json(product);
   } catch (err) {
@@ -125,41 +264,37 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-app.post('/api/products', auth, upload.array('images', 5), async (req, res) => {
+app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
-    const images = req.files.map(f => `/uploads/${f.filename}`);
-    const product = new Product({ ...req.body, images });
-    await product.save();
+    const images = req.files ? req.files.map(f => `/uploads/${f.filename}`) : [];
+    const product = await createProduct(req.body, images);
     res.json(product);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/products/:id', auth, upload.array('images', 5), async (req, res) => {
+app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const images = req.files ? req.files.map(f => `/uploads/${f.filename}`) : null;
+    const product = await updateProduct(req.params.id, req.body, images);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
-    if (req.files && req.files.length > 0) {
-      req.body.images = req.files.map(f => `/uploads/${f.filename}`);
-    }
-    Object.assign(product, req.body);
-    await product.save();
     res.json(product);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/products/:id', auth, async (req, res) => {
+app.delete('/api/products/:id', async (req, res) => {
   try {
-    await Product.findByIdAndDelete(req.params.id);
+    await deleteProduct(req.params.id);
     res.json({ message: 'Produto removido' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Categorias
 app.get('/api/categories', (req, res) => {
   const categories = [
     { id: 'eletronicos', name: 'Eletrônicos', color: '#00b4d8', icon: '📱', bgColor: 'rgba(0, 180, 216, 0.1)' },
@@ -178,18 +313,17 @@ app.get('/api/categories', (req, res) => {
   res.json(categories);
 });
 
-// Servir o frontend React (TEM QUE SER ANTES DO app.get('*'))
+// Servir frontend
 app.use(express.static(path.join(__dirname, '../client/build')));
 
-// Rota para o frontend (TEM QUE SER A ÚLTIMA - captura todas as outras rotas)
+// Rota para frontend
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
   console.log(`📊 Admin: http://localhost:${PORT}/admin`);
-  console.log(`📦 API: http://localhost:${PORT}/api/categories`);
+  console.log(`💾 Banco: ${usandoMongo ? 'MongoDB Atlas' : 'JSON (fallback)'}`);
 });
