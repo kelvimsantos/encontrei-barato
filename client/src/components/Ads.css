@@ -1,0 +1,44 @@
+.side-ad {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 160px;
+  z-index: 10;
+  transition: all 0.3s;
+}
+.side-ad img {
+  width: 100%;
+  border-radius: 10px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+}
+.side-ad img:hover {
+  transform: scale(1.05);
+}
+.left-ad { left: 20px; }
+.right-ad { right: 20px; }
+.mobile-ads-container {
+  width: 100%;
+  padding: 1rem;
+  margin-top: 2rem;
+  display: flex;
+  justify-content: center;
+}
+.mobile-banner-ad {
+  width: 100%;
+  max-width: 320px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.mobile-banner-ad img {
+  width: 100%;
+  height: auto;
+}
+@media (max-width: 1400px) {
+  .side-ad { width: 120px; }
+  .left-ad { left: 10px; }
+  .right-ad { right: 10px; }
+}
+@media (max-width: 1200px) {
+  .side-ad { display: none; }
+}
