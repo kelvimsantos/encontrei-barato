@@ -14,40 +14,55 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ========== CRIAÇÃO DE PASTAS ==========
+// ========== CRIAÇÃO DE PASTAS (OTIMIZADO) ==========
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-  console.log('📁 Pasta uploads criada');
+// Função para garantir que as pastas existem
+function ensureDirectories() {
+  const dirs = [UPLOADS_DIR, DATA_DIR];
+  dirs.forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+      console.log(`📁 Pasta criada: ${dir}`);
+    }
+  });
 }
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  console.log('📁 Pasta data criada');
-}
+ensureDirectories();
 
 // Servir arquivos estáticos
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// ========== CONFIG MULTER ==========
+// ========== CONFIG MULTER OTIMIZADA ==========
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    if (!fs.existsSync(UPLOADS_DIR)) {
-      fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    }
+    ensureDirectories(); // Garante que a pasta existe antes de salvar
     cb(null, UPLOADS_DIR);
   },
   filename: (req, file, cb) => {
+    // Gera nome único e seguro
     const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
     cb(null, uniqueName);
   }
 });
 
+const fileFilter = (req, file, cb) => {
+  // Aceita apenas imagens
+  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+  
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
+  }
+};
+
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 10 * 1024 * 1024 }, // Aumentado para 10MB
+  fileFilter: fileFilter
 });
 
 // ========== SISTEMA DE FALLBACK JSON ==========
@@ -241,6 +256,12 @@ async function deleteProduct(id) {
   }
 }
 
+// ========== MIDDLEWARE DE UPLOAD GLOBAL ==========
+app.use((req, res, next) => {
+  ensureDirectories();
+  next();
+});
+
 // ========== ROTA DE SETUP ==========
 app.get('/setup', async (req, res) => {
   try {
@@ -297,36 +318,116 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+// ROTA DE UPLOAD OTIMIZADA - A MELHOR VERSÃO
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
+  const startTime = Date.now();
+  
   try {
-    console.log('📦 Recebendo produto:', req.body);
-    console.log('📸 Arquivos:', req.files ? req.files.length : 0);
+    // Log detalhado da requisição
+    console.log('═══════════════════════════════════════');
+    console.log('📦 NOVO PRODUTO RECEBIDO');
+    console.log('═══════════════════════════════════════');
+    console.log(`📝 Nome: ${req.body.name || 'N/A'}`);
+    console.log(`🏷️ Categoria: ${req.body.category || 'N/A'}`);
+    console.log(`📸 Quantidade de imagens: ${req.files ? req.files.length : 0}`);
     
-    const images = req.files ? req.files.map(f => `/uploads/${f.filename}`) : [];
+    // Verificar se é um array de arquivos
+    if (req.files && req.files.length > 0) {
+      req.files.forEach((file, index) => {
+        console.log(`   Imagem ${index + 1}: ${file.filename} (${(file.size / 1024).toFixed(2)} KB)`);
+      });
+    }
+    
+    // Garantir que a pasta uploads existe ANTES de processar
+    ensureDirectories();
+    
+    // Processar imagens
+    const images = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        // Verificar se o arquivo foi salvo corretamente
+        const filePath = path.join(UPLOADS_DIR, file.filename);
+        if (fs.existsSync(filePath)) {
+          images.push(`/uploads/${file.filename}`);
+          console.log(`✅ Imagem salva: ${file.filename}`);
+        } else {
+          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
+        }
+      }
+    }
+    
+    // Criar produto
     const product = await createProduct(req.body, images);
-    res.json(product);
+    
+    const duration = Date.now() - startTime;
+    console.log(`✅ Produto criado com sucesso em ${duration}ms`);
+    console.log(`🆔 ID: ${product._id}`);
+    console.log(`🖼️ Imagens: ${images.length}`);
+    console.log('═══════════════════════════════════════\n');
+    
+    res.status(201).json(product);
+    
   } catch (err) {
-    console.error('❌ Erro ao criar produto:', err);
-    res.status(500).json({ error: err.message });
+    console.error('═══════════════════════════════════════');
+    console.error('❌ ERRO AO CRIAR PRODUTO');
+    console.error('═══════════════════════════════════════');
+    console.error(`Erro: ${err.message}`);
+    console.error(`Stack: ${err.stack}`);
+    console.error('═══════════════════════════════════════\n');
+    
+    res.status(500).json({ 
+      error: err.message,
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
 app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
-    const images = req.files ? req.files.map(f => `/uploads/${f.filename}`) : null;
+    console.log(`🔄 Atualizando produto: ${req.params.id}`);
+    console.log(`📸 Novas imagens: ${req.files ? req.files.length : 0}`);
+    
+    ensureDirectories();
+    
+    const images = req.files && req.files.length > 0 
+      ? req.files.map(f => `/uploads/${f.filename}`) 
+      : null;
+    
     const product = await updateProduct(req.params.id, req.body, images);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
+    
+    console.log(`✅ Produto ${req.params.id} atualizado`);
     res.json(product);
   } catch (err) {
+    console.error('❌ Erro ao atualizar produto:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.delete('/api/products/:id', async (req, res) => {
   try {
+    console.log(`🗑️ Deletando produto: ${req.params.id}`);
     await deleteProduct(req.params.id);
+    console.log(`✅ Produto ${req.params.id} deletado`);
     res.json({ message: 'Produto removido' });
   } catch (err) {
+    console.error('❌ Erro ao deletar produto:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ========== ROTA DE TESTE DE UPLOAD ==========
+app.post('/api/test-upload', upload.single('test'), (req, res) => {
+  try {
+    console.log('🧪 Teste de upload recebido');
+    console.log('Arquivo:', req.file);
+    res.json({ 
+      success: true, 
+      file: req.file ? req.file.filename : 'nenhum arquivo',
+      message: 'Upload funcionando!'
+    });
+  } catch (err) {
+    console.error('Erro no teste:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -360,17 +461,38 @@ if (fs.existsSync(BUILD_PATH)) {
 } else {
   console.log('⚠️ Pasta client/build não encontrada');
   app.get('/', (req, res) => {
-    res.send('API funcionando! Frontend não construído ainda.');
+    res.send(`
+      <html><body style="font-family: Arial; text-align: center; padding: 50px;">
+      <h1>🚀 API funcionando!</h1>
+      <p>Frontend não construído ainda. Execute <code>npm run build</code> na pasta client.</p>
+      <p>Modo: <strong>${usandoMongo ? 'MongoDB Atlas' : 'JSON (fallback)'}</strong></p>
+      <br>
+      <a href="/setup">Criar Admin</a>
+      </body></html>
+    `);
   });
 }
 
 // ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Servidor rodando em http://localhost:${PORT}`);
-  console.log(`📊 Admin: http://localhost:${PORT}/admin`);
-  console.log(`🔧 Setup: http://localhost:${PORT}/setup`);
+  console.log('\n═══════════════════════════════════════');
+  console.log('🚀 ENCONTREI BARATO - SERVIDOR ONLINE');
+  console.log('═══════════════════════════════════════');
+  console.log(`📍 URL: http://localhost:${PORT}`);
+  console.log(`🔧 Admin: http://localhost:${PORT}/admin`);
+  console.log(`⚙️ Setup: http://localhost:${PORT}/setup`);
+  console.log(`🧪 Teste upload: http://localhost:${PORT}/api/test-upload`);
   console.log(`💾 Modo: ${usandoMongo ? 'MongoDB Atlas' : 'JSON (fallback)'}`);
   console.log(`📁 Uploads: ${UPLOADS_DIR}`);
-  console.log(`💾 Dados: ${DATA_DIR}\n`);
+  console.log(`💾 Dados: ${DATA_DIR}`);
+  console.log('═══════════════════════════════════════\n');
+  
+  // Teste de permissão da pasta uploads
+  try {
+    fs.accessSync(UPLOADS_DIR, fs.constants.W_OK);
+    console.log('✅ Pasta uploads está gravável');
+  } catch (err) {
+    console.log('⚠️ AVISO: Pasta uploads não está gravável!');
+  }
 });
