@@ -48,8 +48,7 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
 }
 
 // ========== CONFIG MULTER ==========
-// ========== CONFIG MULTER ==========
-const storage = multer.memoryStorage();  // ← MUDOU DE diskStorage PARA memoryStorage
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
@@ -68,58 +67,24 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
-
-
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|gif|webp/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
-  
-  if (mimetype && extname) {
-    return cb(null, true);
-  } else {
-    cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
-  }
-};
-
-const upload = multer({ 
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: fileFilter
-});
-
-// ========== CONEXÃO MONGODB (OTIMIZADA) ==========
+// ========== CONEXÃO MONGODB ==========
 let usandoMongo = false;
 
 if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-    serverSelectionTimeoutMS: 5000,
-  })
+  mongoose.connect(process.env.MONGODB_URI)
   .then(() => {
     console.log('✅ Conectado ao MongoDB Atlas');
     usandoMongo = true;
-    
-    // Criar índices após conectar
-    Product.collection.createIndex({ name: 'text' });
-    Product.collection.createIndex({ category: 1 });
-    Product.collection.createIndex({ createdAt: -1 });
-    User.collection.createIndex({ email: 1 }, { unique: true });
-    
-    // Migrar dados do JSON para MongoDB
-    migrarJSONparaMongo();
   })
   .catch(err => {
-    console.log('⚠️ MongoDB não conectou, usando JSON fallback');
-    console.log('   Erro:', err.message);
+    console.log('⚠️ MongoDB não conectou:', err.message);
     usandoMongo = false;
   });
 } else {
-  console.log('⚠️ MONGODB_URI não definida, usando JSON fallback');
+  console.log('⚠️ MONGODB_URI não definida');
 }
 
-// ========== SCHEMAS (SIMPLIFICADOS) ==========
+// ========== SCHEMAS ==========
 const UserSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -143,7 +108,6 @@ const Product = mongoose.model('Product', ProductSchema);
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
 
-// Inicializar users.json
 if (!fs.existsSync(USERS_FILE)) {
   const defaultUsers = [{
     _id: "admin123",
@@ -152,12 +116,10 @@ if (!fs.existsSync(USERS_FILE)) {
     createdAt: new Date().toISOString()
   }];
   fs.writeFileSync(USERS_FILE, JSON.stringify(defaultUsers, null, 2));
-  console.log('✅ users.json criado');
 }
 
 if (!fs.existsSync(PRODUCTS_FILE)) {
   fs.writeFileSync(PRODUCTS_FILE, JSON.stringify([], null, 2));
-  console.log('✅ products.json criado');
 }
 
 function getUsers() {
@@ -184,46 +146,7 @@ function saveProducts(products) {
   fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2));
 }
 
-// ========== FUNÇÃO DE MIGRAÇÃO ==========
-async function migrarJSONparaMongo() {
-  if (!usandoMongo) return;
-  
-  try {
-    const produtosJSON = getProducts();
-    if (produtosJSON.length === 0) return;
-    
-    console.log(`📦 Migrando ${produtosJSON.length} produtos do JSON para MongoDB...`);
-    let migrados = 0;
-    
-    for (const produto of produtosJSON) {
-      const existe = await Product.findOne({ 
-        name: produto.name, 
-        affiliateLink: produto.affiliateLink 
-      });
-      
-      if (!existe) {
-        await Product.create({
-          name: produto.name,
-          category: produto.category,
-          description: produto.description,
-          affiliateLink: produto.affiliateLink,
-          images: produto.images || [],
-          model3dUrl: produto.model3dUrl || '',
-          createdAt: produto.createdAt ? new Date(produto.createdAt) : new Date()
-        });
-        migrados++;
-      }
-    }
-    
-    if (migrados > 0) {
-      console.log(`✅ ${migrados} produtos migrados para o MongoDB`);
-    }
-  } catch (err) {
-    console.error('❌ Erro na migração:', err.message);
-  }
-}
-
-// ========== FUNÇÕES CRUD OTIMIZADAS ==========
+// ========== FUNÇÕES CRUD ==========
 async function findUserByEmail(email) {
   if (usandoMongo) {
     return await User.findOne({ email });
@@ -263,10 +186,7 @@ async function getProductsList(category, search) {
     let query = {};
     if (category) query.category = category;
     if (search) query.name = { $regex: search, $options: 'i' };
-    
-    const products = await Product.find(query).sort({ createdAt: -1 });
-    console.log(`📦 MongoDB: ${products.length} produtos encontrados`);
-    return products;
+    return await Product.find(query).sort({ createdAt: -1 });
   }
   
   let products = getProducts();
@@ -296,7 +216,6 @@ async function createProduct(productData, images) {
   if (usandoMongo) {
     const product = new Product(newProduct);
     await product.save();
-    console.log(`💾 Produto salvo no MongoDB: ${product.name}`);
     return product;
   }
   
@@ -320,7 +239,6 @@ async function updateProduct(id, productData, images) {
     if (images && images.length) product.images = images;
     
     await product.save();
-    console.log(`🔄 Produto atualizado: ${product.name}`);
     return product;
   }
   
@@ -336,102 +254,20 @@ async function updateProduct(id, productData, images) {
 async function deleteProduct(id) {
   if (usandoMongo && mongoose.Types.ObjectId.isValid(id)) {
     await Product.findByIdAndDelete(id);
-    console.log(`🗑️ Produto deletado do MongoDB: ${id}`);
   } else {
     saveProducts(getProducts().filter(p => p._id !== id));
   }
 }
 
-// ========== FUNÇÕES DE BACKUP CLOUDINARY ==========
-async function backupToCloudinary() {
-  try {
-    if (!process.env.CLOUDINARY_CLOUD_NAME) return null;
-    
-    const products = await getProductsList();
-    const users = getUsers();
-    
-    const backupData = {
-      products,
-      users,
-      lastBackup: new Date().toISOString(),
-      version: '1.0'
-    };
-    
-    const jsonString = JSON.stringify(backupData, null, 2);
-    
-    const result = await cloudinary.uploader.upload(
-      `data:application/json;base64,${Buffer.from(jsonString).toString('base64')}`,
-      {
-        resource_type: "raw",
-        public_id: `encontrei-barato-backup`,
-        folder: "shoppe_affiliate",
-        overwrite: true,
-      }
-    );
-    
-    console.log(`✅ Backup salvo no Cloudinary`);
-    return result.secure_url;
-  } catch (err) {
-    console.error('❌ Erro no backup:', err.message);
-    return null;
-  }
-}
-
-async function restoreFromCloudinary() {
-  try {
-    if (!process.env.CLOUDINARY_CLOUD_NAME) return false;
-    
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const url = `https://res.cloudinary.com/${cloudName}/raw/upload/shoppe_affiliate/encontrei-barato-backup`;
-    
-    const response = await fetch(url);
-    if (!response.ok) return false;
-    
-    const backupData = await response.json();
-    
-    if (backupData.products && backupData.products.length > 0) {
-      if (usandoMongo) {
-        for (const product of backupData.products) {
-          const existe = await Product.findOne({ name: product.name, affiliateLink: product.affiliateLink });
-          if (!existe) {
-            await Product.create(product);
-          }
-        }
-        console.log(`✅ Restaurados ${backupData.products.length} produtos do backup`);
-      } else {
-        saveProducts(backupData.products);
-      }
-      return true;
-    }
-    
-    return false;
-  } catch (err) {
-    console.error('❌ Erro na restauração:', err.message);
-    return false;
-  }
-}
-
 // ========== ROTAS API ==========
 
-// Status do servidor
 app.get('/api/status', (req, res) => {
   res.json({
     usandoMongo,
-    cloudinary: !!process.env.CLOUDINARY_CLOUD_NAME,
-    timestamp: new Date().toISOString()
+    cloudinary: !!process.env.CLOUDINARY_CLOUD_NAME
   });
 });
 
-// Teste Cloudinary
-app.get('/api/cloudinary-test', async (req, res) => {
-  res.json({ 
-    success: true, 
-    cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
-    usandoMongo
-  });
-});
-
-// Login
 app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -453,7 +289,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Produtos
 app.get('/api/products', async (req, res) => {
   try {
     const { category, search } = req.query;
@@ -474,104 +309,77 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// Criar produto com imagens
-// Criar produto com imagens - VERSÃO CORRIGIDA
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`📦 Criando produto: ${req.body.name}`);
-    console.log(`📸 Imagens recebidas: ${req.files ? req.files.length : 0}`);
     
     const images = [];
     
-    if (req.files && req.files.length > 0) {
-      if (!process.env.CLOUDINARY_CLOUD_NAME) {
-        console.error('❌ Cloudinary não configurado');
-        return res.status(500).json({ error: 'Cloudinary não configurado' });
-      }
-      
+    if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       for (const file of req.files) {
         try {
-          // Converter o buffer para base64
           const base64Image = file.buffer.toString('base64');
           const dataURI = `data:${file.mimetype};base64,${base64Image}`;
           
-          // Upload para o Cloudinary usando a string base64
           const result = await cloudinary.uploader.upload(dataURI, {
             folder: 'shoppe_affiliate/products',
-            transformation: [{ width: 800, height: 800, crop: 'limit' }],
-            timeout: 60000
+            transformation: [{ width: 800, height: 800, crop: 'limit' }]
           });
           
           images.push(result.secure_url);
           console.log(`✅ Imagem enviada: ${result.secure_url}`);
         } catch (uploadErr) {
-          console.error('❌ Erro no upload da imagem:', uploadErr.message);
+          console.error('❌ Erro no upload:', uploadErr.message);
         }
       }
     }
     
     const product = await createProduct(req.body, images);
-    console.log(`✅ Produto criado: ${product.name} com ${images.length} imagens`);
     res.status(201).json(product);
     
   } catch (err) {
-    console.error('❌ Erro ao criar produto:', err.message);
+    console.error('❌ Erro:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-
-// Atualizar produto - VERSÃO CORRIGIDA
 app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`🔄 Atualizando produto: ${req.params.id}`);
-    console.log(`📸 Novas imagens: ${req.files ? req.files.length : 0}`);
     
     let images = null;
     
-    if (req.files && req.files.length > 0) {
-      if (!process.env.CLOUDINARY_CLOUD_NAME) {
-        console.error('❌ Cloudinary não configurado');
-        return res.status(500).json({ error: 'Cloudinary não configurado' });
-      }
-      
+    if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       images = [];
       for (const file of req.files) {
         try {
-          // Converter o buffer para base64
           const base64Image = file.buffer.toString('base64');
           const dataURI = `data:${file.mimetype};base64,${base64Image}`;
           
-          // Upload para o Cloudinary
           const result = await cloudinary.uploader.upload(dataURI, {
             folder: 'shoppe_affiliate/products',
-            transformation: [{ width: 800, height: 800, crop: 'limit' }],
-            timeout: 60000
+            transformation: [{ width: 800, height: 800, crop: 'limit' }]
           });
           
           images.push(result.secure_url);
           console.log(`✅ Imagem enviada: ${result.secure_url}`);
         } catch (uploadErr) {
-          console.error('❌ Erro no upload da imagem:', uploadErr.message);
+          console.error('❌ Erro no upload:', uploadErr.message);
         }
       }
     }
     
     const product = await updateProduct(req.params.id, req.body, images);
-    if (!product) {
-      return res.status(404).json({ error: 'Produto não encontrado' });
-    }
+    if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
     
-    console.log(`✅ Produto atualizado: ${product.name}`);
     res.json(product);
     
   } catch (err) {
-    console.error('❌ Erro ao atualizar produto:', err.message);
+    console.error('❌ Erro:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Deletar produto
 app.delete('/api/products/:id', async (req, res) => {
   try {
     await deleteProduct(req.params.id);
@@ -581,57 +389,17 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 });
 
-// Backup e restore
-app.get('/api/backup', async (req, res) => {
-  const url = await backupToCloudinary();
-  res.json({ success: !!url, url });
-});
-
-app.post('/api/restore', async (req, res) => {
-  const restored = await restoreFromCloudinary();
-  res.json({ success: restored });
-});
-
-// Teste upload Cloudinary
-app.post('/api/test-cloudinary-upload', upload.single('testImage'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Nenhuma imagem enviada' });
-    }
-    
-    const filePath = path.join(UPLOADS_DIR, req.file.filename);
-    const result = await cloudinary.uploader.upload(filePath, {
-      folder: 'shoppe_affiliate/test'
-    });
-    
-    try { fs.unlinkSync(filePath); } catch(e) {}
-    
-    res.json({ success: true, url: result.secure_url });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Categorias
 app.get('/api/categories', (req, res) => {
   const categories = [
     { id: 'eletronicos', name: 'Eletrônicos', color: '#00b4d8', icon: '📱' },
     { id: 'decoracao', name: 'Decoração', color: '#ff6b6b', icon: '🖼️' },
     { id: 'relogios', name: 'Relógios', color: '#ffd93d', icon: '⌚' },
     { id: 'tenis', name: 'Tênis', color: '#6c63ff', icon: '👟' },
-    { id: 'roupas', name: 'Roupas', color: '#ff6b9d', icon: '👕' },
-    { id: 'quarto', name: 'Quarto', color: '#a8e6cf', icon: '🛏️' },
-    { id: 'cozinha', name: 'Cozinha', color: '#ff8c42', icon: '🍳' },
-    { id: 'sala', name: 'Sala', color: '#ff4757', icon: '🛋️' },
-    { id: 'banheiro', name: 'Banheiro', color: '#4d908e', icon: '🚿' },
-    { id: 'area-externa', name: 'Área Externa', color: '#70e000', icon: '🌳' },
-    { id: 'beleza', name: 'Beleza', color: '#ff85a1', icon: '💄' },
-    { id: 'saude', name: 'Saúde', color: '#00c49a', icon: '💊' }
+    { id: 'roupas', name: 'Roupas', color: '#ff6b9d', icon: '👕' }
   ];
   res.json(categories);
 });
 
-// Setup
 app.get('/setup', async (req, res) => {
   try {
     await deleteUserByEmail('admin@shoppe.com');
@@ -642,7 +410,7 @@ app.get('/setup', async (req, res) => {
       <h1>✅ Admin Criado!</h1>
       <p>Email: <strong>admin@shoppe.com</strong></p>
       <p>Senha: <strong>admin123</strong></p>
-      <p>Banco: <strong>${usandoMongo ? 'MongoDB Atlas ✅' : 'JSON (local) ⚠️'}</strong></p>
+      <p>MongoDB: <strong>${usandoMongo ? '✅ Conectado' : '⚠️ Fallback JSON'}</strong></p>
       <p>Cloudinary: <strong>${process.env.CLOUDINARY_CLOUD_NAME ? '✅ Ativo' : '❌ Inativo'}</strong></p>
       <a href="/admin">Ir para o Admin</a>
       </body></html>
@@ -650,16 +418,6 @@ app.get('/setup', async (req, res) => {
   } catch (err) {
     res.send('❌ Erro: ' + err.message);
   }
-});
-
-// Debug
-app.get('/api/debug-mode', async (req, res) => {
-  const products = await getProductsList();
-  res.json({
-    usandoMongo,
-    cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME,
-    productCount: products.length
-  });
 });
 
 // ========== SERVIR FRONTEND ==========
@@ -673,24 +431,14 @@ if (fs.existsSync(BUILD_PATH)) {
   });
 } else {
   app.get('/', (req, res) => {
-    res.send(`
-      <html><body>
-      <h1>🚀 API funcionando!</h1>
-      <p>Modo: ${usandoMongo ? 'MongoDB' : 'JSON fallback'}</p>
-      <a href="/setup">Criar Admin</a>
-      </body></html>
-    `);
+    res.send(`<h1>API Online</h1><p>MongoDB: ${usandoMongo ? '✅' : '❌'}</p><a href="/setup">Setup</a>`);
   });
 }
 
 // ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log('\n═══════════════════════════════════════');
-  console.log('🚀 SERVIDOR ONLINE');
-  console.log('═══════════════════════════════════════');
-  console.log(`📍 Porta: ${PORT}`);
-  console.log(`💾 MongoDB: ${usandoMongo ? '✅ Conectado' : '❌ Usando JSON'}`);
-  console.log(`☁️ Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ Ativo' : '❌ Inativo'}`);
-  console.log('═══════════════════════════════════════\n');
+  console.log(`\n🚀 Servidor rodando na porta ${PORT}`);
+  console.log(`💾 MongoDB: ${usandoMongo ? '✅ Conectado' : '❌ Fallback JSON'}`);
+  console.log(`☁️ Cloudinary: ${process.env.CLOUDINARY_CLOUD_NAME ? '✅ Ativo' : '❌ Inativo'}\n`);
 });
