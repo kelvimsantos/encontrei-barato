@@ -48,17 +48,27 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
 }
 
 // ========== CONFIG MULTER ==========
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    ensureDirectories();
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, uniqueSuffix + ext);
+// ========== CONFIG MULTER ==========
+const storage = multer.memoryStorage();  // ← MUDOU DE diskStorage PARA memoryStorage
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const mimetype = allowedTypes.test(file.mimetype);
+  
+  if (mimetype) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
   }
+};
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: fileFilter
 });
+
+
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
