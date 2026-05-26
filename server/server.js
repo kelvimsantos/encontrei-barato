@@ -465,32 +465,33 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // Criar produto com imagens
-// Criar produto com imagens - CORRIGIDO (usando memory storage)
+// Criar produto com imagens - VERSÃO CORRIGIDA
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
-    console.log(`📦 NOVO PRODUTO: ${req.body.name}`);
+    console.log(`📦 Criando produto: ${req.body.name}`);
+    console.log(`📸 Imagens recebidas: ${req.files ? req.files.length : 0}`);
     
     const images = [];
     
-    if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
+    if (req.files && req.files.length > 0) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+        console.error('❌ Cloudinary não configurado');
+        return res.status(500).json({ error: 'Cloudinary não configurado' });
+      }
+      
       for (const file of req.files) {
         try {
-          // Upload direto do buffer (memory) - SEM SALVAR EM DISCO
-          const uploadPromise = new Promise((resolve, reject) => {
-            const uploadStream = cloudinary.uploader.upload_stream(
-              { 
-                folder: 'shoppe_affiliate/products',
-                transformation: [{ width: 800, height: 800, crop: 'limit' }]
-              },
-              (error, result) => {
-                if (error) reject(error);
-                else resolve(result);
-              }
-            );
-            uploadStream.end(file.buffer);
+          // Converter o buffer para base64
+          const base64Image = file.buffer.toString('base64');
+          const dataURI = `data:${file.mimetype};base64,${base64Image}`;
+          
+          // Upload para o Cloudinary usando a string base64
+          const result = await cloudinary.uploader.upload(dataURI, {
+            folder: 'shoppe_affiliate/products',
+            transformation: [{ width: 800, height: 800, crop: 'limit' }],
+            timeout: 60000
           });
           
-          const result = await uploadPromise;
           images.push(result.secure_url);
           console.log(`✅ Imagem enviada: ${result.secure_url}`);
         } catch (uploadErr) {
@@ -500,36 +501,62 @@ app.post('/api/products', upload.array('images', 5), async (req, res) => {
     }
     
     const product = await createProduct(req.body, images);
+    console.log(`✅ Produto criado: ${product.name} com ${images.length} imagens`);
     res.status(201).json(product);
     
   } catch (err) {
-    console.error('❌ Erro:', err.message);
+    console.error('❌ Erro ao criar produto:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Atualizar produto
+
+// Atualizar produto - VERSÃO CORRIGIDA
 app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
+    console.log(`🔄 Atualizando produto: ${req.params.id}`);
+    console.log(`📸 Novas imagens: ${req.files ? req.files.length : 0}`);
+    
     let images = null;
     
-    if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
+    if (req.files && req.files.length > 0) {
+      if (!process.env.CLOUDINARY_CLOUD_NAME) {
+        console.error('❌ Cloudinary não configurado');
+        return res.status(500).json({ error: 'Cloudinary não configurado' });
+      }
+      
       images = [];
       for (const file of req.files) {
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        const result = await cloudinary.uploader.upload(filePath, {
-          folder: 'shoppe_affiliate/products'
-        });
-        images.push(result.secure_url);
-        try { fs.unlinkSync(filePath); } catch(e) {}
+        try {
+          // Converter o buffer para base64
+          const base64Image = file.buffer.toString('base64');
+          const dataURI = `data:${file.mimetype};base64,${base64Image}`;
+          
+          // Upload para o Cloudinary
+          const result = await cloudinary.uploader.upload(dataURI, {
+            folder: 'shoppe_affiliate/products',
+            transformation: [{ width: 800, height: 800, crop: 'limit' }],
+            timeout: 60000
+          });
+          
+          images.push(result.secure_url);
+          console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        } catch (uploadErr) {
+          console.error('❌ Erro no upload da imagem:', uploadErr.message);
+        }
       }
     }
     
     const product = await updateProduct(req.params.id, req.body, images);
-    if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
+    if (!product) {
+      return res.status(404).json({ error: 'Produto não encontrado' });
+    }
     
+    console.log(`✅ Produto atualizado: ${product.name}`);
     res.json(product);
+    
   } catch (err) {
+    console.error('❌ Erro ao atualizar produto:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
