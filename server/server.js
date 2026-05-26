@@ -47,14 +47,25 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
   console.log('⚠️ Cloudinary não configurado');
 }
 
-// ========== CONFIG MULTER ==========
-const storage = multer.memoryStorage();
+// ========== CONFIG MULTER - USANDO diskStorage (IGUAL SEU PROJETO QUE FUNCIONA) ==========
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    ensureDirectories();
+    cb(null, UPLOADS_DIR);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, uniqueSuffix + ext);
+  }
+});
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
   
-  if (mimetype) {
+  if (mimetype && extname) {
     return cb(null, true);
   } else {
     cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
@@ -309,40 +320,60 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+// ========== ROTA POST - CRIAR PRODUTO (USANDO O MESMO PADRÃO DO SEU PROJETO QUE FUNCIONA) ==========
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`📦 Criando produto: ${req.body.name}`);
+    console.log(`📸 Imagens recebidas: ${req.files ? req.files.length : 0}`);
     
     const images = [];
     
     if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       for (const file of req.files) {
-        try {
-          const base64Image = file.buffer.toString('base64');
-          const dataURI = `data:${file.mimetype};base64,${base64Image}`;
-          
-          const result = await cloudinary.uploader.upload(dataURI, {
-            folder: 'shoppe_affiliate/products',
-            transformation: [{ width: 800, height: 800, crop: 'limit' }]
-          });
-          
-          images.push(result.secure_url);
-          console.log(`✅ Imagem enviada: ${result.secure_url}`);
-        } catch (uploadErr) {
-          console.error('❌ Erro no upload:', uploadErr.message);
+        const filePath = path.join(UPLOADS_DIR, file.filename);
+        
+        // Verificar se o arquivo existe
+        if (!fs.existsSync(filePath)) {
+          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
+          continue;
         }
+        
+        // Upload para o Cloudinary (MESMO MÉTODO DO SEU PROJETO QUE FUNCIONA)
+        const result = await cloudinary.uploader.upload(filePath, {
+          folder: 'shoppe_affiliate/products',
+          transformation: [{ width: 800, height: 800, crop: 'limit' }]
+        });
+        
+        images.push(result.secure_url);
+        console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        
+        // Remove arquivo local após upload
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {}
       }
     }
     
     const product = await createProduct(req.body, images);
+    console.log(`✅ Produto criado com ${images.length} imagens`);
     res.status(201).json(product);
     
   } catch (err) {
     console.error('❌ Erro:', err.message);
+    
+    // Limpar arquivos temporários em caso de erro
+    if (req.files) {
+      for (const file of req.files) {
+        const filePath = path.join(UPLOADS_DIR, file.filename);
+        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch(e) {}
+      }
+    }
+    
     res.status(500).json({ error: err.message });
   }
 });
 
+// ========== ROTA PUT - ATUALIZAR PRODUTO ==========
 app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`🔄 Atualizando produto: ${req.params.id}`);
@@ -352,26 +383,31 @@ app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
     if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       images = [];
       for (const file of req.files) {
-        try {
-          const base64Image = file.buffer.toString('base64');
-          const dataURI = `data:${file.mimetype};base64,${base64Image}`;
-          
-          const result = await cloudinary.uploader.upload(dataURI, {
-            folder: 'shoppe_affiliate/products',
-            transformation: [{ width: 800, height: 800, crop: 'limit' }]
-          });
-          
-          images.push(result.secure_url);
-          console.log(`✅ Imagem enviada: ${result.secure_url}`);
-        } catch (uploadErr) {
-          console.error('❌ Erro no upload:', uploadErr.message);
+        const filePath = path.join(UPLOADS_DIR, file.filename);
+        
+        if (!fs.existsSync(filePath)) {
+          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
+          continue;
         }
+        
+        const result = await cloudinary.uploader.upload(filePath, {
+          folder: 'shoppe_affiliate/products',
+          transformation: [{ width: 800, height: 800, crop: 'limit' }]
+        });
+        
+        images.push(result.secure_url);
+        console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        
+        try {
+          fs.unlinkSync(filePath);
+        } catch (e) {}
       }
     }
     
     const product = await updateProduct(req.params.id, req.body, images);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
     
+    console.log(`✅ Produto atualizado`);
     res.json(product);
     
   } catch (err) {
@@ -389,6 +425,7 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 });
 
+// ========== CATEGORIAS ==========
 app.get('/api/categories', (req, res) => {
   const categories = [
     { id: 'eletronicos', name: 'Eletrônicos', color: '#00b4d8', icon: '📱' },
@@ -400,6 +437,7 @@ app.get('/api/categories', (req, res) => {
   res.json(categories);
 });
 
+// ========== SETUP ==========
 app.get('/setup', async (req, res) => {
   try {
     await deleteUserByEmail('admin@shoppe.com');
