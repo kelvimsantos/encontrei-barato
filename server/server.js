@@ -394,7 +394,14 @@ app.get('/api/categories', (req, res) => {
     { id: 'decoracao', name: 'Decoração', color: '#ff6b6b', icon: '🖼️' },
     { id: 'relogios', name: 'Relógios', color: '#ffd93d', icon: '⌚' },
     { id: 'tenis', name: 'Tênis', color: '#6c63ff', icon: '👟' },
-    { id: 'roupas', name: 'Roupas', color: '#ff6b9d', icon: '👕' }
+    { id: 'roupas', name: 'Roupas', color: '#ff6b9d', icon: '👕' },
+    { id: 'quarto', name: 'Quarto', color: '#a8e6cf', icon: '🛏️' },
+    { id: 'cozinha', name: 'Cozinha', color: '#ff8c42', icon: '🍳' },
+    { id: 'sala', name: 'Sala', color: '#ff4757', icon: '🛋️' },
+    { id: 'banheiro', name: 'Banheiro', color: '#4d908e', icon: '🚿' },
+    { id: 'area-externa', name: 'Área Externa', color: '#70e000', icon: '🌳' },
+    { id: 'beleza', name: 'Beleza', color: '#ff85a1', icon: '💄' },
+    { id: 'saude', name: 'Saúde', color: '#00c49a', icon: '💊' }
   ];
   res.json(categories);
 });
