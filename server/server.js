@@ -200,12 +200,9 @@ async function backupToCloudinary() {
         `data:application/json;base64,${Buffer.from(jsonString).toString('base64')}`,
         {
           resource_type: "raw",
-          // IMPORTANTE:
-          // - Para backups com folder, use um public_id SEM o prefixo do folder.
-          // - O Cloudinary assina o request incluindo folder/overwrite/timestamp.
-          // Isso evita erro de assinatura (Invalid Signature).
+          // Para backups raw, o mais estável em deploy é NÃO usar folder.
+          // Mantém public_id simples e sem folder para evitar divergência de assinatura.
           public_id: `encontrei-barato-backup`,
-          folder: "shoppe_affiliate",
           overwrite: true,
         },
         (error, result) => {
@@ -290,12 +287,32 @@ async function restoreFromCloudinary() {
 
 app.get('/api/force-backup', async (req, res) => {
   try {
-    const url = await backupToCloudinary();
+    let uploadError = null;
+    let url = null;
+
+    try {
+      url = await backupToCloudinary();
+    } catch (e) {
+      uploadError = e;
+    }
+
+    // tenta restaurar também (pra garantir leitura do arquivo e não só upload)
+    let restoreOk = false;
+    let restoreError = null;
+    try {
+      restoreOk = await restoreFromCloudinary();
+    } catch (e) {
+      restoreError = e;
+    }
+
     const products = getProducts();
-    
-    res.json({ 
-      success: !!url, 
+
+    res.json({
+      success: !!url,
       url,
+      uploadError: uploadError ? uploadError.message || String(uploadError) : null,
+      restoreOk,
+      restoreError: restoreError ? restoreError.message || String(restoreError) : null,
       productCount: products.length,
       cloudinaryConfigured: !!process.env.CLOUDINARY_CLOUD_NAME
     });
