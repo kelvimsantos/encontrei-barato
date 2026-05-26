@@ -465,6 +465,7 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // Criar produto com imagens
+// Criar produto com imagens - CORRIGIDO (usando memory storage)
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`📦 NOVO PRODUTO: ${req.body.name}`);
@@ -473,15 +474,28 @@ app.post('/api/products', upload.array('images', 5), async (req, res) => {
     
     if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       for (const file of req.files) {
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        
-        const result = await cloudinary.uploader.upload(filePath, {
-          folder: 'shoppe_affiliate/products',
-          transformation: [{ width: 800, height: 800, crop: 'limit' }]
-        });
-        
-        images.push(result.secure_url);
-        try { fs.unlinkSync(filePath); } catch(e) {}
+        try {
+          // Upload direto do buffer (memory) - SEM SALVAR EM DISCO
+          const uploadPromise = new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream(
+              { 
+                folder: 'shoppe_affiliate/products',
+                transformation: [{ width: 800, height: 800, crop: 'limit' }]
+              },
+              (error, result) => {
+                if (error) reject(error);
+                else resolve(result);
+              }
+            );
+            uploadStream.end(file.buffer);
+          });
+          
+          const result = await uploadPromise;
+          images.push(result.secure_url);
+          console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        } catch (uploadErr) {
+          console.error('❌ Erro no upload da imagem:', uploadErr.message);
+        }
       }
     }
     
@@ -490,11 +504,6 @@ app.post('/api/products', upload.array('images', 5), async (req, res) => {
     
   } catch (err) {
     console.error('❌ Erro:', err.message);
-    if (req.files) {
-      for (const file of req.files) {
-        try { fs.unlinkSync(path.join(UPLOADS_DIR, file.filename)); } catch(e) {}
-      }
-    }
     res.status(500).json({ error: err.message });
   }
 });
