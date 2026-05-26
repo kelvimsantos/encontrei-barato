@@ -16,22 +16,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ========== CRIAÇÃO DE PASTAS ==========
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DATA_DIR = path.join(__dirname, 'data');
 
 function ensureDirectories() {
-  const dirs = [UPLOADS_DIR, DATA_DIR];
-  dirs.forEach(dir => {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-      console.log(`📁 Pasta criada: ${dir}`);
-    }
-  });
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log(`📁 Pasta criada: ${DATA_DIR}`);
+  }
 }
 ensureDirectories();
-
-// Servir arquivos estáticos
-app.use('/uploads', express.static(UPLOADS_DIR));
 
 // ========== CONFIG CLOUDINARY ==========
 const cloudinary = require('cloudinary').v2;
@@ -47,11 +40,8 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
   console.log('⚠️ Cloudinary não configurado');
 }
 
-// ========== CONFIG MULTER - USANDO diskStorage (IGUAL SEU PROJETO QUE FUNCIONA) ==========
-// ========== CONFIG MULTER - CORRIGIDO PARA RENDER ==========
-// REMOVA o bloco atual e substitua por este:
-
-const storage = multer.memoryStorage();  // ← USA MEMÓRIA, NÃO DISCO
+// ========== CONFIG MULTER - MEMORY STORAGE (FUNCIONA NO RENDER) ==========
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
@@ -69,6 +59,7 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: fileFilter
 });
+
 // ========== CONEXÃO MONGODB ==========
 let usandoMongo = false;
 
@@ -261,6 +252,23 @@ async function deleteProduct(id) {
   }
 }
 
+// ========== FUNÇÃO DE UPLOAD CLOUDINARY (MEMORY STORAGE) ==========
+async function uploadToCloudinary(fileBuffer, mimetype) {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: 'shoppe_affiliate/products',
+        transformation: [{ width: 800, height: 800, crop: 'limit' }]
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
+    uploadStream.end(fileBuffer);
+  });
+}
+
 // ========== ROTAS API ==========
 
 app.get('/api/status', (req, res) => {
@@ -311,60 +319,35 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// ========== ROTA POST - CRIAR PRODUTO (USANDO O MESMO PADRÃO DO SEU PROJETO QUE FUNCIONA) ==========
+// ========== POST - CRIAR PRODUTO ==========
 app.post('/api/products', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`📦 Criando produto: ${req.body.name}`);
-    console.log(`📸 Imagens recebidas: ${req.files ? req.files.length : 0}`);
     
     const images = [];
     
     if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       for (const file of req.files) {
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        
-        // Verificar se o arquivo existe
-        if (!fs.existsSync(filePath)) {
-          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
-          continue;
-        }
-        
-        // Upload para o Cloudinary (MESMO MÉTODO DO SEU PROJETO QUE FUNCIONA)
-        const result = await cloudinary.uploader.upload(filePath, {
-          folder: 'shoppe_affiliate/products',
-          transformation: [{ width: 800, height: 800, crop: 'limit' }]
-        });
-        
-        images.push(result.secure_url);
-        console.log(`✅ Imagem enviada: ${result.secure_url}`);
-        
-        // Remove arquivo local após upload
         try {
-          fs.unlinkSync(filePath);
-        } catch (e) {}
+          const result = await uploadToCloudinary(file.buffer, file.mimetype);
+          images.push(result.secure_url);
+          console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        } catch (uploadErr) {
+          console.error('❌ Erro upload:', uploadErr.message);
+        }
       }
     }
     
     const product = await createProduct(req.body, images);
-    console.log(`✅ Produto criado com ${images.length} imagens`);
     res.status(201).json(product);
     
   } catch (err) {
     console.error('❌ Erro:', err.message);
-    
-    // Limpar arquivos temporários em caso de erro
-    if (req.files) {
-      for (const file of req.files) {
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch(e) {}
-      }
-    }
-    
     res.status(500).json({ error: err.message });
   }
 });
 
-// ========== ROTA PUT - ATUALIZAR PRODUTO ==========
+// ========== PUT - ATUALIZAR PRODUTO ==========
 app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
   try {
     console.log(`🔄 Atualizando produto: ${req.params.id}`);
@@ -374,31 +357,19 @@ app.put('/api/products/:id', upload.array('images', 5), async (req, res) => {
     if (req.files && req.files.length > 0 && process.env.CLOUDINARY_CLOUD_NAME) {
       images = [];
       for (const file of req.files) {
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        
-        if (!fs.existsSync(filePath)) {
-          console.log(`⚠️ Arquivo não encontrado: ${file.filename}`);
-          continue;
-        }
-        
-        const result = await cloudinary.uploader.upload(filePath, {
-          folder: 'shoppe_affiliate/products',
-          transformation: [{ width: 800, height: 800, crop: 'limit' }]
-        });
-        
-        images.push(result.secure_url);
-        console.log(`✅ Imagem enviada: ${result.secure_url}`);
-        
         try {
-          fs.unlinkSync(filePath);
-        } catch (e) {}
+          const result = await uploadToCloudinary(file.buffer, file.mimetype);
+          images.push(result.secure_url);
+          console.log(`✅ Imagem enviada: ${result.secure_url}`);
+        } catch (uploadErr) {
+          console.error('❌ Erro upload:', uploadErr.message);
+        }
       }
     }
     
     const product = await updateProduct(req.params.id, req.body, images);
     if (!product) return res.status(404).json({ error: 'Produto não encontrado' });
     
-    console.log(`✅ Produto atualizado`);
     res.json(product);
     
   } catch (err) {
