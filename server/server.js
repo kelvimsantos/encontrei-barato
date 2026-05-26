@@ -48,24 +48,16 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && proce
 }
 
 // ========== CONFIG MULTER - USANDO diskStorage (IGUAL SEU PROJETO QUE FUNCIONA) ==========
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    ensureDirectories();
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, uniqueSuffix + ext);
-  }
-});
+// ========== CONFIG MULTER - CORRIGIDO PARA RENDER ==========
+// REMOVA o bloco atual e substitua por este:
+
+const storage = multer.memoryStorage();  // ← USA MEMÓRIA, NÃO DISCO
 
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|webp/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
   
-  if (mimetype && extname) {
+  if (mimetype) {
     return cb(null, true);
   } else {
     cb(new Error('Apenas imagens são permitidas (jpeg, jpg, png, gif, webp)'));
@@ -77,7 +69,6 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: fileFilter
 });
-
 // ========== CONEXÃO MONGODB ==========
 let usandoMongo = false;
 
