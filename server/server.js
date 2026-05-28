@@ -442,6 +442,33 @@ if (fs.existsSync(BUILD_PATH)) {
   });
 }
 
+
+
+app.get('/api/debug-create-admin', async (req, res) => {
+  try {
+    const hashed = bcrypt.hashSync('admin123', 10);
+    
+    if (usandoMongo) {
+      await User.deleteOne({ email: 'admin@shoppe.com' });
+      await User.create({ email: 'admin@shoppe.com', password: hashed });
+      res.json({ success: true, message: 'Admin criado no MongoDB!' });
+    } else {
+      const users = getUsers();
+      const filtered = users.filter(u => u.email !== 'admin@shoppe.com');
+      filtered.push({
+        _id: Date.now().toString(),
+        email: 'admin@shoppe.com',
+        password: hashed,
+        createdAt: new Date().toISOString()
+      });
+      saveUsers(filtered);
+      res.json({ success: true, message: 'Admin criado no JSON fallback!' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
